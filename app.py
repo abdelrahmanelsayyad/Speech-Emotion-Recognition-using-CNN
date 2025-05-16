@@ -13,8 +13,6 @@ import gdown
 import time
 from datetime import datetime
 import pytz
-import sounddevice as sd
-from scipy.io.wavfile import write
 import base64
 from io import BytesIO
 
@@ -121,32 +119,6 @@ def get_emotion_description(emotion):
         'sad': "Sadness is an emotional pain associated with feelings of disadvantage, loss, despair, grief, helplessness, and sorrow."
     }
     return descriptions.get(emotion.lower(), "No description available.")
-
-def record_audio(duration=3, sample_rate=22050):
-    """Record audio from microphone."""
-    st.write("🎙️ Recording...")
-    progress_bar = st.progress(0)
-    
-    # Create a recording placeholder
-    recording_placeholder = st.empty()
-    recording_placeholder.markdown("🔴 Recording in progress...")
-    
-    # Record audio
-    audio_data = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1)
-    
-    # Show progress
-    for i in range(100):
-        time.sleep(duration/100)
-        progress_bar.progress(i + 1)
-    
-    sd.wait()
-    recording_placeholder.markdown("✅ Recording complete!")
-    
-    # Save to temporary file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    write(temp_file.name, sample_rate, audio_data)
-    
-    return temp_file.name
 
 def create_spectrogram_custom(y, sr):
     """Create a customized spectrogram with better coloring."""
@@ -308,7 +280,7 @@ def main():
         
         st.subheader("🔍 About")
         st.markdown("""
-        This application analyzes speech audio to detect emotions. Upload an audio file or record yourself speaking to determine the emotional tone.
+        This application analyzes speech audio to detect emotions. Upload an audio file to determine the emotional tone.
         
         The AI model recognizes these emotions:
         - 😠 Angry
@@ -325,7 +297,6 @@ def main():
         
         # Audio settings
         st.subheader("Audio Settings")
-        duration = st.slider("Recording Duration (seconds)", 2, 10, 3)
         audio_offset = st.slider("Audio Offset (seconds)", 0.0, 1.0, 0.6, 0.1, 
                                help="Start point for analysis in the audio file")
         
@@ -346,7 +317,7 @@ def main():
     model, scaler, encoder = load_assets()
     
     # Create tabs for different input methods
-    tabs = st.tabs(["📤 Upload Audio", "🎙️ Record Audio", "📊 History"])
+    tabs = st.tabs(["📤 Upload Audio", "📊 History"])
     
     # Tab 1: Upload Audio
     with tabs[0]:
@@ -372,31 +343,8 @@ def main():
                 # Process the audio file
                 process_audio_file(tmp_path, model, scaler, encoder, show_waveform, show_spectrogram)
     
-    # Tab 2: Record Audio
+    # Tab 2: History
     with tabs[1]:
-        st.markdown('<div class="css-card">', unsafe_allow_html=True)
-        st.subheader("Record Your Voice")
-        st.markdown(f"Record {duration} seconds of audio using your microphone to analyze the emotional tone.")
-        
-        record_col1, record_col2 = st.columns([1, 1])
-        with record_col1:
-            record_button = st.button("🎙️ Start Recording", key="record_button")
-        
-        if record_button:
-            try:
-                audio_path = record_audio(duration=duration)
-                st.audio(audio_path, format="audio/wav")
-                
-                with st.spinner("Analyzing your recording..."):
-                    # Process the audio file
-                    process_audio_file(audio_path, model, scaler, encoder, show_waveform, show_spectrogram)
-            except Exception as e:
-                st.error(f"Error recording audio: {e}")
-                st.info("Make sure your microphone is properly connected and permissions are granted to the browser.")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Tab 3: History
-    with tabs[2]:
         if show_history:
             st.markdown('<div class="css-card">', unsafe_allow_html=True)
             st.subheader("Analysis History")
@@ -415,7 +363,7 @@ def main():
                     key='download-csv'
                 )
             else:
-                st.info("No analysis history yet. Upload or record audio to see results here.")
+                st.info("No analysis history yet. Upload audio to see results here.")
             st.markdown('</div>', unsafe_allow_html=True)
 
 def process_audio_file(audio_path, model, scaler, encoder, show_waveform=True, show_spectrogram=True):
