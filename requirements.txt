@@ -6,6 +6,4 @@ librosa
 scikit-learn
 matplotlib
 gdown
-sounddevice         # for audio recording functionality
-scipy               # needed for audio file operations
 pytz                # for timezone handling in timestamps
