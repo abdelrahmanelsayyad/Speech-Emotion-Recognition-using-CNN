@@ -3,8 +3,6 @@ import tempfile
 import pickle
 import numpy as np
 import pandas as pd
-import librosa
-import librosa.display
 import streamlit as st
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -15,6 +13,15 @@ from datetime import datetime
 import pytz
 import base64
 from io import BytesIO
+
+# Conditional imports to avoid PortAudio dependency issues
+try:
+    import librosa
+    import librosa.display
+    LIBROSA_AVAILABLE = True
+except (ImportError, OSError):
+    LIBROSA_AVAILABLE = False
+    st.warning("librosa or PortAudio not available. Some audio processing features will be limited.")
 
 # Set page configuration
 st.set_page_config(
@@ -48,17 +55,31 @@ def download_once(file_id: str, out_path: str):
 @st.cache_resource(show_spinner="Loading model and assets...")
 def load_assets():
     """Load the model, scaler, and encoder."""
-    download_once(MODEL_FILE_ID,   MODEL_PATH)
-    download_once(SCALER_FILE_ID,  SCALER_PATH)
-    download_once(ENCODER_FILE_ID, ENCODER_PATH)
-    
-    model = tf.keras.models.load_model(MODEL_PATH)
-    with open(SCALER_PATH,  "rb") as f: scaler  = pickle.load(f)
-    with open(ENCODER_PATH, "rb") as f: encoder = pickle.load(f)
-    return model, scaler, encoder
+    try:
+        download_once(MODEL_FILE_ID,   MODEL_PATH)
+        download_once(SCALER_FILE_ID,  SCALER_PATH)
+        download_once(ENCODER_FILE_ID, ENCODER_PATH)
+        
+        model = tf.keras.models.load_model(MODEL_PATH)
+        
+        # Handle version warnings with pickle
+        with open(SCALER_PATH,  "rb") as f: 
+            scaler = pickle.load(f)
+        with open(ENCODER_PATH, "rb") as f: 
+            encoder = pickle.load(f)
+            
+        return model, scaler, encoder
+    except Exception as e:
+        st.error(f"Error loading assets: {e}")
+        return None, None, None
 
 def extract_features(y, sr):
     """Extract audio features: zero crossing rate, RMS energy, and MFCCs."""
+    if not LIBROSA_AVAILABLE:
+        # Fallback for when librosa is not available
+        # Return a random feature vector for demonstration
+        return np.random.random(TARGET_FEATURE_LEN)
+    
     # Zero crossing rate
     zcr = librosa.feature.zero_crossing_rate(y=y)[0]
     
@@ -73,6 +94,12 @@ def extract_features(y, sr):
 
 def prepare_example(path, scaler):
     """Load audio file, extract features, and prepare for prediction."""
+    if not LIBROSA_AVAILABLE:
+        # Generate random features if librosa is not available
+        feat = np.random.random(TARGET_FEATURE_LEN)
+        feat = scaler.transform(feat.reshape(1, -1))
+        return np.expand_dims(feat, axis=2)
+    
     y, sr = librosa.load(path, duration=2.5, offset=0.6)
     feat = extract_features(y, sr)
     
@@ -122,21 +149,42 @@ def get_emotion_description(emotion):
 
 def create_spectrogram_custom(y, sr):
     """Create a customized spectrogram with better coloring."""
-    # Create a custom colormap
-    colors = [(0.2, 0.2, 0.6), (0.6, 0.8, 0.9), (1, 1, 0.8), (1, 0.7, 0.4), (1, 0, 0)]
-    cmap = LinearSegmentedColormap.from_list('custom_cmap', colors, N=100)
+    if not LIBROSA_AVAILABLE:
+        # Create a sample spectrogram if librosa is not available
+        fig, ax = plt.subplots(figsize=(10, 4))
+        img = ax.imshow(np.random.random((128, 150)), aspect='auto', origin='lower', cmap='viridis')
+        plt.colorbar(img, format='%+2.0f dB')
+        plt.title('Mel Spectrogram (Example)')
+        plt.tight_layout()
+        
+        # Convert plot to image
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, facecolor='#1A1A1A')
+        buffer.seek(0)
+        plt.close()
+        return buffer
     
-    plt.figure(figsize=(10, 4))
+    # Dark theme for matplotlib
+    plt.style.use('dark_background')
+    
+    # Create a custom colormap for dark theme
+    colors = [(0.1, 0.1, 0.5), (0.5, 0.7, 0.9), (0.9, 0.9, 0.6), (0.9, 0.6, 0.3), (0.8, 0.1, 0.1)]
+    cmap = LinearSegmentedColormap.from_list('custom_dark_cmap', colors, N=100)
+    
+    fig, ax = plt.subplots(figsize=(10, 4), facecolor='#1A1A1A')
     spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
     spec_db = librosa.power_to_db(spec, ref=np.max)
-    librosa.display.specshow(spec_db, sr=sr, x_axis='time', y_axis='mel', cmap=cmap)
-    plt.colorbar(format='%+2.0f dB')
-    plt.title('Mel Spectrogram')
+    img = librosa.display.specshow(spec_db, sr=sr, x_axis='time', y_axis='mel', cmap=cmap, ax=ax)
+    plt.colorbar(img, format='%+2.0f dB')
+    plt.title('Mel Spectrogram', color='white')
+    ax.set_xlabel('Time', color='white')
+    ax.set_ylabel('Frequency', color='white')
+    ax.tick_params(colors='white')
     plt.tight_layout()
     
     # Convert plot to image
     buffer = BytesIO()
-    plt.savefig(buffer, format='png', dpi=300)
+    plt.savefig(buffer, format='png', dpi=300, facecolor='#1A1A1A')
     buffer.seek(0)
     plt.close()
     
@@ -161,22 +209,37 @@ def add_to_history(filename, emotion, confidence):
     })
     st.session_state.history = pd.concat([new_row, history_df]).reset_index(drop=True)
 
-def get_base64_of_bin_file(file_path):
-    """Get base64 encoded binary file for embedding in page."""
-    with open(file_path, "rb") as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
-
 def get_waveform_plot(y, sr):
     """Create a waveform plot for the audio."""
-    plt.figure(figsize=(10, 2))
-    librosa.display.waveshow(y, sr=sr, alpha=0.8)
-    plt.title('Waveform')
+    if not LIBROSA_AVAILABLE:
+        # Create a sample waveform if librosa is not available
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(10, 2), facecolor='#1A1A1A')
+        x = np.linspace(0, 3, 1000)
+        y = 0.5 * np.sin(2 * np.pi * 440 * x) * np.exp(-x)
+        plt.plot(x, y, color='#00BFFF')
+        plt.title('Waveform (Example)', color='white')
+        plt.tight_layout()
+        
+        # Convert plot to image
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png', dpi=300, facecolor='#1A1A1A')
+        buffer.seek(0)
+        plt.close()
+        return buffer
+    
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 2), facecolor='#1A1A1A')
+    librosa.display.waveshow(y, sr=sr, alpha=0.8, color='#00BFFF')
+    plt.title('Waveform', color='white')
+    ax.set_xlabel('Time (s)', color='white')
+    ax.set_ylabel('Amplitude', color='white')
+    ax.tick_params(colors='white')
     plt.tight_layout()
     
     # Convert plot to image
     buffer = BytesIO()
-    plt.savefig(buffer, format='png', dpi=300)
+    plt.savefig(buffer, format='png', dpi=300, facecolor='#1A1A1A')
     buffer.seek(0)
     plt.close()
     
@@ -185,21 +248,23 @@ def get_waveform_plot(y, sr):
 # ───────── Custom CSS ─────────────────────────────────────
 
 def apply_custom_css():
-    """Apply custom CSS styling to the application."""
+    """Apply custom CSS styling with dark mode to the application."""
     st.markdown("""
     <style>
-        /* App-wide styling */
+        /* Dark mode styling */
         .main {
-            background-color: #f5f7fa;
+            background-color: #121212;
+            color: #E0E0E0;
         }
         
         .stApp {
             font-family: 'Arial', sans-serif;
+            background-color: #121212;
         }
         
         /* Headers */
-        h1, h2, h3 {
-            color: #1E3A8A;
+        h1, h2, h3, h4, h5, h6 {
+            color: #BB86FC;
             font-weight: 600;
         }
         
@@ -207,24 +272,25 @@ def apply_custom_css():
         .css-card {
             border-radius: 10px;
             padding: 20px;
-            background-color: white;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            background-color: #1E1E1E;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
             margin-bottom: 20px;
+            border: 1px solid #333333;
         }
         
         /* Button styling */
         .stButton>button {
             border-radius: 5px;
-            border: 1px solid #4CAF50;
+            border: 1px solid #03DAC6;
             padding: 10px 24px;
-            background-color: #4CAF50;
-            color: white;
+            background-color: #03DAC6;
+            color: #121212;
             font-weight: 500;
         }
         
         .stButton>button:hover {
-            background-color: #45a049;
-            border: 1px solid #45a049;
+            background-color: #018786;
+            border: 1px solid #018786;
         }
         
         /* Styling for results section */
@@ -240,28 +306,106 @@ def apply_custom_css():
         /* Custom tabs and containers */
         .stTabs [data-baseweb="tab-list"] {
             gap: 2px;
+            background-color: #1E1E1E;
         }
         
         .stTabs [data-baseweb="tab"] {
-            background-color: #f1f3f9;
+            background-color: #2D2D2D;
             border-radius: 4px 4px 0px 0px;
             padding: 10px 16px;
             border: none;
+            color: #B0B0B0;
         }
         
         .stTabs [aria-selected="true"] {
-            background-color: white !important;
-            border-top: 2px solid #4CAF50;
-            border-left: 1px solid #ddd;
-            border-right: 1px solid #ddd;
+            background-color: #3D3D3D !important;
+            border-top: 2px solid #03DAC6;
+            border-left: 1px solid #444;
+            border-right: 1px solid #444;
             border-bottom: none;
+            color: #FFFFFF;
         }
         
         /* Upload button styling */
         .uploadedFile {
             border-radius: 5px;
-            border: 1px solid #ccc;
+            border: 1px solid #444;
             padding: 10px;
+            background-color: #2D2D2D;
+        }
+        
+        /* Sidebar styling */
+        .css-sidebar {
+            background-color: #1E1E1E;
+            padding: 20px;
+            border-right: 1px solid #333;
+        }
+        
+        /* Dataframe styling */
+        .dataframe-container {
+            background-color: #2D2D2D;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        
+        div[data-testid="stDataFrame"] table {
+            background-color: #2D2D2D;
+            color: #E0E0E0;
+        }
+        
+        div[data-testid="stDataFrame"] th {
+            background-color: #3D3D3D;
+            color: #03DAC6;
+        }
+        
+        div[data-testid="stDataFrame"] td {
+            background-color: #2D2D2D;
+            color: #E0E0E0;
+        }
+        
+        /* Audio player */
+        audio {
+            background-color: #2D2D2D;
+            border-radius: 5px;
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        /* File uploader */
+        .st-emotion-cache-13q3hda {
+            background-color: #2D2D2D;
+            border: 1px dashed #555;
+        }
+        
+        /* Sliders */
+        .st-emotion-cache-1b0n4c {
+            background-color: #3D3D3D;
+        }
+        
+        .st-emotion-cache-1rs6os {
+            background-color: #03DAC6;
+        }
+        
+        /* All text elements */
+        p, div, span {
+            color: #E0E0E0;
+        }
+        
+        /* Info boxes */
+        .stAlert {
+            background-color: #2D2D2D;
+            color: #E0E0E0;
+            border: 1px solid #444;
+        }
+        
+        /* Progress bars */
+        .stProgress > div > div {
+            background-color: #03DAC6;
+        }
+        
+        /* Images */
+        img {
+            border-radius: 5px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -269,7 +413,7 @@ def apply_custom_css():
 # ───────── Main Application ─────────────────────────────────────
 
 def main():
-    # Apply custom CSS
+    # Apply custom CSS for dark mode
     apply_custom_css()
     
     # Sidebar
@@ -313,8 +457,25 @@ def main():
     st.title("🎭 Emotion Voice Analyzer")
     st.markdown("Analyze the emotional tone in speech audio using advanced AI")
     
+    # Check for library availability
+    if not LIBROSA_AVAILABLE:
+        st.warning("""
+        ⚠️ Audio processing libraries (librosa/PortAudio) are not fully available. 
+        The app will run in demo mode with simulated features. 
+        
+        To fix this, install the required system dependencies:
+        ```
+        sudo apt-get update && sudo apt-get install -y libsndfile1 portaudio19-dev
+        pip install librosa soundfile
+        ```
+        """)
+    
     # Load model and assets
     model, scaler, encoder = load_assets()
+    
+    if model is None or scaler is None or encoder is None:
+        st.error("Failed to load required models. Please check your installation and try again.")
+        return
     
     # Create tabs for different input methods
     tabs = st.tabs(["📤 Upload Audio", "📊 History"])
@@ -351,7 +512,9 @@ def main():
             
             history_df = get_history_dataframe()
             if len(history_df) > 0:
+                st.markdown('<div class="dataframe-container">', unsafe_allow_html=True)
                 st.dataframe(history_df, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Add download button for history
                 csv = history_df.to_csv(index=False).encode('utf-8')
@@ -369,15 +532,23 @@ def main():
 def process_audio_file(audio_path, model, scaler, encoder, show_waveform=True, show_spectrogram=True):
     """Process an audio file and display the analysis results."""
     try:
-        # Load audio for visualization
-        y, sr = librosa.load(audio_path)
+        # Load audio for visualization if librosa is available
+        if LIBROSA_AVAILABLE:
+            y, sr = librosa.load(audio_path)
+        else:
+            # Create dummy data for demonstration
+            sr = 22050
+            y = np.random.random(sr * 3) * 2 - 1  # 3 seconds of audio
         
         # Display audio player
+        st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.subheader("Audio Sample")
         st.audio(audio_path)
+        st.markdown('</div>', unsafe_allow_html=True)
         
         # Create columns for visualizations
         if show_waveform or show_spectrogram:
+            st.markdown('<div class="css-card">', unsafe_allow_html=True)
             st.subheader("Audio Visualizations")
             vis_cols = st.columns([1, 1])
             
@@ -392,6 +563,7 @@ def process_audio_file(audio_path, model, scaler, encoder, show_waveform=True, s
                 with vis_cols[1]:
                     spectrogram_img = create_spectrogram_custom(y, sr)
                     st.image(spectrogram_img, use_column_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         
         # Prepare audio features for prediction
         with st.spinner("Extracting audio features..."):
@@ -407,7 +579,7 @@ def process_audio_file(audio_path, model, scaler, encoder, show_waveform=True, s
             add_to_history(audio_path, emotion_label, confidence)
         
         # Display results
-        st.markdown("---")
+        st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.subheader("Analysis Results")
         
         # Create columns for results
@@ -435,32 +607,41 @@ def process_audio_file(audio_path, model, scaler, encoder, show_waveform=True, s
             })
             emotion_df = emotion_df.sort_values('Probability', ascending=False)
             
-            # Custom bar chart with colors
-            fig, ax = plt.subplots(figsize=(10, 5))
+            # Custom bar chart with colors - dark theme
+            plt.style.use('dark_background')
+            fig, ax = plt.subplots(figsize=(10, 5), facecolor='#1A1A1A')
             bars = ax.barh(emotion_df['Emotion'], emotion_df['Probability'], color=[get_emotion_color(e) for e in emotion_df['Emotion']])
             ax.set_xlim(0, 1)
-            ax.set_xlabel('Probability')
-            ax.set_title('Emotion Probability Distribution')
+            ax.set_xlabel('Probability', color='white')
+            ax.set_title('Emotion Probability Distribution', color='white')
+            ax.tick_params(colors='white')
             
             # Add percentage labels
             for bar in bars:
                 width = bar.get_width()
                 label_x_pos = width + 0.01
                 ax.text(label_x_pos, bar.get_y() + bar.get_height()/2, f'{width:.1%}',
-                        va='center', fontsize=10)
+                        va='center', fontsize=10, color='white')
+            
+            plt.tight_layout()
+            fig.patch.set_facecolor('#1A1A1A')
             
             st.pyplot(fig)
         
         # Display emotion description
         st.markdown(f"""
-        <div style="background-color: {emotion_color}10; border-left: 5px solid {emotion_color}; padding: 15px; border-radius: 5px;">
+        <div style="background-color: {emotion_color}20; border-left: 5px solid {emotion_color}; padding: 15px; border-radius: 5px;">
             <h4>About {emotion_label.capitalize()} Emotion:</h4>
             <p>{get_emotion_description(emotion_label)}</p>
         </div>
         """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         
         # Remove the temporary file
-        os.unlink(audio_path)
+        try:
+            os.unlink(audio_path)
+        except:
+            pass
         
     except Exception as e:
         st.error(f"Error processing audio: {e}")
