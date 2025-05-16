@@ -33,8 +33,8 @@ st.set_page_config(
 
 # ---------------- Google-Drive file IDs ----------------
 MODEL_FILE_ID   = "1rNjobTEVv7iylFSPinYdohpZS-rs5YRJ"
-SCALER_FILE_ID  = "1aEN09Avk2G9_Oso7Nl3kLit4cCFphtMo"
-ENCODER_FILE_ID = "1INMy6xujSKvW__RAeVUEJRjTqvPdzeQ8"
+SCALER_FILE_ID  = "1INMy6xujSKvW__RAeVUEJRjTqvPdzeQ8"
+ENCODER_FILE_ID = "1aEN09Avk2G9_Oso7Nl3kLit4cCFphtMo"
 # -------------------------------------------------------
 MODEL_PATH        = "CNN_full_model.h5"
 SCALER_PATH       = "scaler2.pickle"
