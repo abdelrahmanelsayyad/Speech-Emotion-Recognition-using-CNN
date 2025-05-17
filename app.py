@@ -451,7 +451,7 @@ def main():
         show_history = st.checkbox("Show History", True)
         
         st.markdown("---")
-        st.caption("PROJECT DONE BY: ABDELRAHMAN ELSAYYAD & MOSTAFA WALID ")
+        st.markdown("**Project Contributors:**\n- Abdelrahman Elsayyad\n- Mostafa Walid")
     
     # Main content
     st.title("🎭 Emotion Voice Analyzer")
